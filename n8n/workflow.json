@@ -1,0 +1,156 @@
+{
+  "name": "ATS Resume Screening",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "cb07652a-0ba7-4eea-b488-94b5289d83da",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "1",
+      "name": "Resume Screening Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        240,
+        300
+      ],
+      "webhookId": "cb07652a-0ba7-4eea-b488-94b5289d83da"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const incoming = $input.first().json.body ?? $input.first().json;\nconst resumeText = String(incoming.resumeText ?? '').trim();\nconst jobDescription = String(incoming.jobDescription ?? '').trim();\n\nif (!resumeText || !jobDescription) {\n  throw new Error('Both resumeText and jobDescription are required.');\n}\n\nconst prompt = `You are an evidence-based resume screening assistant. Return ONLY one valid JSON object, with no markdown or extra text.\n\nJOB DESCRIPTION:\n${jobDescription.slice(0, 12000)}\n\nRESUME TEXT:\n${resumeText.slice(0, 12000)}\n\nExtract the candidate's name and experience only from the resume. Never use the uploaded filename as a name. If the name is absent, use \"Name not identified in resume\". Report professional experience only when supported by the resume; do not count education or projects as employment years. If years are not stated, use null for experienceYears and \"Not stated in resume\" for experience. Use null for requiredExperienceYears unless the job description explicitly states a minimum.\n\nExtract concise skills and specific qualifications required by the job description. matchedSkills must contain only requirements with direct evidence in the resume. missingSkills must contain the remaining required items that are not evidenced in the resume; absence from the resume does not prove the candidate lacks a skill. Use the same canonical labels in requiredSkills, matchedSkills, and missingSkills. relevantExperience is true only for relevant work or internship evidence stated in the resume. Write a realistic 2-4 sentence summary grounded in both texts, distinguishing documented evidence from gaps. Do not invent a score or hiring recommendation; the application calculates those.\n\nReturn exactly this JSON shape:\n{\"candidateName\":\"Name not identified in resume\",\"experience\":\"Not stated in resume\",\"experienceYears\":null,\"relevantExperience\":false,\"requiredExperienceYears\":null,\"requiredSkills\":[\"Python\"],\"matchedSkills\":[\"Python\"],\"missingSkills\":[],\"summary\":\"Evidence-based 2-4 sentence assessment.\"}`;\n\nreturn [{ json: { prompt } }];"
+      },
+      "id": "2",
+      "name": "Prepare ATS Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "key",
+              "value": "={{ $env.GEMINI_API_KEY }}"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ contents: [{ parts: [{ text: $json.prompt }] }], generationConfig: { temperature: 0.1, maxOutputTokens: 2048, responseMimeType: 'application/json' } }) }}",
+        "options": {}
+      },
+      "id": "3",
+      "name": "Gemini ATS Analysis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const response = $input.first().json;\nconst raw = response.candidates?.[0]?.content?.parts?.[0]?.text ?? '';\nconst cleaned = String(raw).replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/```\\s*$/i, '').trim();\n\nlet result;\ntry {\n  result = JSON.parse(cleaned);\n} catch {\n  const match = cleaned.match(/\\{[\\s\\S]*\\}/);\n  if (!match) throw new Error(`Gemini returned invalid JSON: ${cleaned.slice(0, 200)}`);\n  result = JSON.parse(match[0]);\n}\n\nconst required = ['candidateName', 'experience', 'experienceYears', 'relevantExperience', 'requiredExperienceYears', 'requiredSkills', 'matchedSkills', 'missingSkills', 'summary'];\nfor (const field of required) {\n  if (!(field in result)) throw new Error(`Gemini response is missing ${field}.`);\n}\n\nreturn [{ json: result }];"
+      },
+      "id": "4",
+      "name": "Parse ATS Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "5",
+      "name": "Return ATS Result",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1200,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Resume Screening Webhook": {
+      "main": [
+        [
+          {
+            "node": "Prepare ATS Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare ATS Prompt": {
+      "main": [
+        [
+          {
+            "node": "Gemini ATS Analysis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gemini ATS Analysis": {
+      "main": [
+        [
+          {
+            "node": "Parse ATS Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse ATS Result": {
+      "main": [
+        [
+          {
+            "node": "Return ATS Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "ats-resume-screening-v1",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}
