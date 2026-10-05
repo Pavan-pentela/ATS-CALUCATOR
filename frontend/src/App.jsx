@@ -21,7 +21,7 @@ export default function App() {
             <div className="brand-title">ATS <span>RESUME SCREENING</span></div>
             <div className={`brand-workflow-badge ${ANALYSIS_MODE === 'unconfigured' ? 'status-unconfigured' : ''}`} role="status">
               <span aria-hidden="true">{ANALYSIS_MODE === 'unconfigured' ? '!' : '●'}</span>
-              {ANALYSIS_MODE === 'gemini' ? 'N8N AUTOMATED' : ANALYSIS_MODE === 'n8n' ? 'N8N AUTOMATED' : 'AI ANALYSIS NOT CONFIGURED'}
+              {ANALYSIS_MODE === 'gemini' ? 'GEMINI AI ACTIVE' : ANALYSIS_MODE === 'n8n' ? 'N8N AUTOMATED' : 'AI ANALYSIS NOT CONFIGURED'}
             </div>
           </div>
         </header>

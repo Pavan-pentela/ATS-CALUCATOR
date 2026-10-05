@@ -87,48 +87,61 @@ Extract concise skills and specific qualifications required by the job descripti
 Return exactly this JSON shape:
 {"candidateName":"Name not identified in resume","experience":"Not stated in resume","experienceYears":null,"relevantExperience":false,"requiredExperienceYears":null,"requiredSkills":["Python"],"matchedSkills":["Python"],"missingSkills":[],"summary":"Evidence-based 2-4 sentence assessment."}`
 
-  const url = `${buildGeminiGenerateUrl(GEMINI_MODEL)}?key=${encodeURIComponent(GEMINI_KEY)}`
-
-  const res = await retryTransientRequest(async () => {
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: {
-          temperature: 0.1,
-          maxOutputTokens: 4096,
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: 'OBJECT',
-            properties: {
-              candidateName: { type: 'STRING' },
-              experience: { type: 'STRING' },
-              experienceYears: { type: 'NUMBER', nullable: true },
-              relevantExperience: { type: 'BOOLEAN' },
-              requiredExperienceYears: { type: 'NUMBER', nullable: true },
-              requiredSkills: { type: 'ARRAY', items: { type: 'STRING' } },
-              matchedSkills: { type: 'ARRAY', items: { type: 'STRING' } },
-              missingSkills: { type: 'ARRAY', items: { type: 'STRING' } },
-              summary: { type: 'STRING' },
-            },
-            required: [
-              'candidateName', 'experience', 'experienceYears', 'relevantExperience',
-              'requiredExperienceYears', 'requiredSkills', 'matchedSkills', 'missingSkills', 'summary',
-            ],
-          },
+  const requestBody = JSON.stringify({
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: {
+      temperature: 0.1,
+      maxOutputTokens: 4096,
+      responseMimeType: 'application/json',
+      responseSchema: {
+        type: 'OBJECT',
+        properties: {
+          candidateName: { type: 'STRING' },
+          experience: { type: 'STRING' },
+          experienceYears: { type: 'NUMBER', nullable: true },
+          relevantExperience: { type: 'BOOLEAN' },
+          requiredExperienceYears: { type: 'NUMBER', nullable: true },
+          requiredSkills: { type: 'ARRAY', items: { type: 'STRING' } },
+          matchedSkills: { type: 'ARRAY', items: { type: 'STRING' } },
+          missingSkills: { type: 'ARRAY', items: { type: 'STRING' } },
+          summary: { type: 'STRING' },
         },
-      }),
-    })
-
-    if (!response.ok) {
-      const details = await response.json().catch(() => ({}))
-      const error = new Error(details?.error?.message || `Gemini API error ${response.status}`)
-      error.status = response.status
-      throw error
-    }
-    return response
+        required: [
+          'candidateName', 'experience', 'experienceYears', 'relevantExperience',
+          'requiredExperienceYears', 'requiredSkills', 'matchedSkills', 'missingSkills', 'summary',
+        ],
+      },
+    },
   })
+
+  const sendRequest = async (targetUrl) => {
+    return await retryTransientRequest(async () => {
+      const response = await fetch(targetUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: requestBody,
+      })
+
+      if (!response.ok) {
+        const details = await response.json().catch(() => ({}))
+        const error = new Error(details?.error?.message || `Gemini API error ${response.status}`)
+        error.status = response.status
+        throw error
+      }
+      return response
+    })
+  }
+
+  let res
+  const directUrl = `${buildGeminiGenerateUrl(GEMINI_MODEL)}?key=${encodeURIComponent(GEMINI_KEY)}`
+  const proxyUrl  = `/api/gemini/v1beta/models/${resolveGeminiModel(GEMINI_MODEL)}:generateContent?key=${encodeURIComponent(GEMINI_KEY)}`
+
+  try {
+    res = await sendRequest(proxyUrl)
+  } catch (proxyErr) {
+    console.warn('Proxy request failed, attempting direct Gemini API call...', proxyErr)
+    res = await sendRequest(directUrl)
+  }
 
   const data = await res.json()
   const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text || ''
@@ -160,15 +173,36 @@ async function callN8n(resumeText, jobDescription) {
   }
 }
 
-// ── Route to correct backend ───────────────────────────────────────────────
+// ── Route to correct backend with smart fallback ─────────────────────────
 async function analyzeResume(resumeText, jobDescription) {
-  if (MODE === 'unconfigured') {
+  if (MODE === 'unconfigured' && !GEMINI_KEY) {
     throw new Error('AI analysis is not configured. Add a Gemini API key or n8n webhook URL in frontend/.env.local, then restart the app. No demo report will be generated.')
   }
 
-  const response = MODE === 'gemini'
-    ? await callGemini(resumeText, jobDescription)
-    : await callN8n(resumeText, jobDescription)
+  let response
+  if (MODE === 'gemini') {
+    try {
+      response = await callGemini(resumeText, jobDescription)
+    } catch (err) {
+      if (N8N_WEBHOOK) {
+        console.warn('Gemini request failed, trying n8n webhook fallback...', err)
+        response = await callN8n(resumeText, jobDescription)
+      } else {
+        throw err
+      }
+    }
+  } else {
+    try {
+      response = await callN8n(resumeText, jobDescription)
+    } catch (err) {
+      if (GEMINI_KEY) {
+        console.warn('n8n webhook failed, falling back to Gemini direct analysis...', err)
+        response = await callGemini(resumeText, jobDescription)
+      } else {
+        throw err
+      }
+    }
+  }
 
   return finalizeAnalysisResult(validateAnalysisResponse(response))
 }
@@ -446,7 +480,7 @@ export default function UploadForm({ loading, setLoading, setResult, error, setE
               fontSize: 11, fontWeight: 700, letterSpacing: '0.1em',
               textTransform: 'uppercase', color: 'rgba(167,139,250,0.6)',
               marginBottom: 20,
-            }}>Processing via n8n workflow</p>
+            }}>{MODE === 'gemini' ? 'Processing via Gemini AI' : 'Processing via n8n workflow'}</p>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               {STEPS.map((s, i) => {
