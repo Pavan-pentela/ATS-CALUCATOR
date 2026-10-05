@@ -132,16 +132,44 @@ Return exactly this JSON shape:
     })
   }
 
-  let res
-  const directUrl = `${buildGeminiGenerateUrl(GEMINI_MODEL)}?key=${encodeURIComponent(GEMINI_KEY)}`
-  const proxyUrl  = `/api/gemini/v1beta/models/${resolveGeminiModel(GEMINI_MODEL)}:generateContent?key=${encodeURIComponent(GEMINI_KEY)}`
+  const candidateModels = [
+    'gemini-3.5-flash-lite',
+    resolveGeminiModel(GEMINI_MODEL),
+    'gemini-3.5-flash',
+    'gemini-flash-latest',
+  ].filter((m, idx, arr) => m && arr.indexOf(m) === idx)
 
-  try {
-    res = await sendRequest(proxyUrl)
-  } catch (proxyErr) {
-    console.warn('Proxy request failed, attempting direct Gemini API call...', proxyErr)
-    res = await sendRequest(directUrl)
+  let res
+  let lastError
+
+  for (const model of candidateModels) {
+    const proxyUrl  = `/api/gemini/v1beta/models/${model}:generateContent?key=${encodeURIComponent(GEMINI_KEY)}`
+    const directUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(GEMINI_KEY)}`
+
+    try {
+      res = await sendRequest(proxyUrl)
+      break
+    } catch (proxyErr) {
+      if (proxyErr.status === 503 || proxyErr.status === 429) {
+        console.warn(`Model ${model} unavailable (${proxyErr.status}), trying next candidate...`)
+        lastError = proxyErr
+        continue
+      }
+      try {
+        res = await sendRequest(directUrl)
+        break
+      } catch (directErr) {
+        lastError = directErr
+        if (directErr.status === 503 || directErr.status === 429) {
+          console.warn(`Model ${model} unavailable on direct API (${directErr.status}), trying next candidate...`)
+          continue
+        }
+        throw directErr
+      }
+    }
   }
+
+  if (!res) throw lastError || new Error('All Gemini model candidates failed. Please try again.')
 
   const data = await res.json()
   const raw = data?.candidates?.[0]?.content?.parts?.[0]?.text || ''
