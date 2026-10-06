@@ -35,7 +35,7 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173
+Open http://localhost:1727
 
 ### 2. Configure an Analysis Provider
 
